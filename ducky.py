@@ -100,7 +100,7 @@ def execute_command(cmd, args):
         
     elif cmd.startswith('F') and len(cmd) == 2 and cmd[1].isdigit():
         fnum = int(cmd[1])
-        if 1 <= fnum <= 9:
+        if 1 <= fnum <= 12:
             send_key(f'f{fnum}')
         else:
             print(f"  [WARN] Unknown command: {cmd} '{args}'")
@@ -127,16 +127,16 @@ def execute_command(cmd, args):
         send_key('right')
         
     elif cmd in ('GUI', 'WINDOWS'):
-        # GUI alone presses the Windows key
-        send_key('win')
-        
-    elif cmd in ('GUI', 'WINDOWS'):
         arg = args.strip().lower() if args else ''
         if arg == 'r':
             pyautogui.hotkey('win', 'r')
             time.sleep(0.5)
         elif arg == 'e':
             pyautogui.hotkey('win', 'e')
+            time.sleep(0.5)
+        elif arg:
+            # Win + other key combinations
+            pyautogui.hotkey('win', arg)
             time.sleep(0.5)
         else:
             send_key('win')
@@ -169,17 +169,7 @@ def execute_command(cmd, args):
             pyautogui.hotkey('alt', 'f4')
         else:
             send_key('alt')
-        
-    elif cmd.startswith('F') and len(cmd) <= 3:
-        try:
-            fnum = int(cmd[1:])
-            if 1 <= fnum <= 12:
-                send_key(f'f{fnum}')
-            else:
-                print(f"  [WARN] Unknown command: {cmd} '{args}'")
-        except ValueError:
-            print(f"  [WARN] Unknown command: {cmd} '{args}'")
-        
+
     elif cmd in ('VOLUME UP', 'VOLUMEUP'):
         for _ in range(3):
             send_key('volume_up')

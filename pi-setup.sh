@@ -100,8 +100,8 @@ echo "Raspberry Pi Gadget" > "$GADGET_PATH/string_descriptors/0x409"
 ln -sf "$GADGET_PATH/hid.usb0" "$GADGET_PATH/configs/c.1/hid.usb0"
 
 # Bind gadget to UDC (write UDC name to bind file)
-echo "$(basename $US_GADGET)" > /sys/class/udc/name 2>/dev/null || \
-    echo "$US_GADGET" > /sys/class/udc/bind 2>/dev/null
+echo "$(basename $US_GADGET)" > /sys/class/udc/UDC 2>/dev/null || \
+    echo "$US_GADGET" > /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
 
 echo "USB Gadget activated!"
 GADGET_EOF
@@ -308,7 +308,7 @@ def load_config():
                             pass
                     elif key == 'max_retries':
                         try:
-                            config['max_retries = int(value)
+                            config['max_retries'] = int(value)
                         except ValueError:
                             pass
                     elif key == 'fallback_local':
@@ -422,7 +422,7 @@ def main():
         if args[i] == '--url' and i + 1 < len(args):
             url = args[i + 1]
             i += 2
-        elif args[i] == '--local' and i + 1 < len(args:
+        elif args[i] == '--local' and i + 1 < len(args):
             local_path = args[i + 1]
             i += 2
         elif args[i] == '--dry-run':

