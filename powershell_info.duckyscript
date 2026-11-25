@@ -1,0 +1,19 @@
+DELAY 1000
+GUI r
+DELAY 500
+STRING powershell
+ENTER
+DELAY 2000
+STRING Write-Host "=== Raspberry Pi Rubber Ducky ===" -ForegroundColor Cyan
+ENTER
+STRING Write-Host "`nSystem Info:" -ForegroundColor Yellow
+ENTER
+STRING Get-ComputerInfo | Select-Object CsName, OsDescription, CsProcessors | Format-List
+ENTER
+DELAY 1000
+STRING Write-Host "`nNetwork Config:" -ForegroundColor Yellow
+ENTER
+STRING Get-NetIPConfiguration | Where-Object { $_.IPv4Address -ne $null } | Select-Object InterfaceAlias, IPv4Address, DNSServer | Format-Table
+ENTER
+DELAY 1500
+STRING Write-Host "`nDone!" -ForegroundColor Green

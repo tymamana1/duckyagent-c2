@@ -1,0 +1,21 @@
+REM Sample payload for remote loader demonstration
+REM Host this file at your SCRIPT_URL (GitHub, Pastebin, or own server)
+REM The Pi will fetch and run it each time it boots
+
+DELAY 2000
+STRING ============================================
+ENTER
+STRING   Remote DuckyScript Loader Demo
+ENTER
+STRING   Script fetched from remote URL!
+ENTER
+STRING ============================================
+ENTER
+ENTER
+GUI r
+DELAY 500
+STRING powershell -NoProfile -Command "Write-Host 'Remote script loaded!' -ForegroundColor Green"
+ENTER
+DELAY 1000
+STRING exit
+ENTER

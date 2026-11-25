@@ -1,0 +1,21 @@
+# Remote DuckyScript Loader Configuration
+# Copy this to /usr/local/share/duckyscripts/loader.conf on the Pi
+
+# OPTION 1: Use your PC as a local server (recommended for home use)
+# Start the server with: start_ducky_server.bat
+# Then set SCRIPT_URL below. Two choices:
+#   A) Your PC's IP address (may change if DHCP renews):
+#      SCRIPT_URL=http://192.168.68.XXX/default.duckyscript
+#   B) Your PC's hostname via mDNS (stays the same):
+#      SCRIPT_URL=http://YOUR_COMPUTER_NAME.local/default.duckyscript
+
+# OPTION 2: Use a remote URL (GitHub, Pastebin, or any HTTP server)
+# This never changes regardless of your local network:
+#   SCRIPT_URL=https://raw.githubusercontent.com/youruser/yourrepo/main/payload.duckyscript
+
+
+# How many times to retry download on failure (default: 3)
+MAX_RETRIES=3
+
+# If true, fall back to local scripts when remote fetch fails
+FALLBACK_LOCAL=true

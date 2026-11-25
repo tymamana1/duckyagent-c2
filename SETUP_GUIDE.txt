@@ -1,0 +1,173 @@
+================================================================================
+          RASPBERRY PI 2W AS USB RUBBER DUCKY - SETUP GUIDE
+================================================================================
+
+WHAT IS A Rubber Ducky?
+-----------------------
+A USB Rubber Ducky is a small device that looks like a USB memory stick but
+acts as a keyboard when plugged into a computer. It types pre-programmed
+commands super fast, automating tasks or running scripts on the target PC.
+
+Your Raspberry Pi 2W can do exactly this!
+
+
+HARDWARE YOU'LL NEED:
+---------------------
+1. Raspberry Pi Zero 2 W (or Pi 2B/3B/4B with OTG cable)
+2. MicroSD card (8GB+ recommended)
+3. USB-C or Micro-USB cable (for power + data)
+4. Target computer to test on
+
+
+SETUP STEPS:
+------------
+
+STEP 1: Flash Raspberry Pi OS onto SD Card
+   a. Download Raspberry Pi Imager from https://raspberrypi.com/software/
+   b. Select your Pi model and the OS (Raspberry Pi OS Lite recommended)
+   c. Click "Edit Settings" before flashing to add these:
+      - Enable SSH (set username/password)
+      - Configure WiFi SSID and password
+      - Set timezone, keyboard layout
+
+STEP 2: Enable USB Gadget Mode on the Pi
+    After flashing, open the SD card's config.txt file and ADD this line:
+    
+      dtoverlay=dwc2
+    
+    Then add to cmdline.txt (create if missing) in the boot partition:
+    
+      dwc2.dr_vbus=1 root=/dev/mmcblk0p7 rw rootwait
+    
+    NOTE: Modern Pi OS (Bookworm+) uses a two-partition layout.
+    Use 'root=/dev/mmcblk0p7' for Bookworm+ or 'root=/dev/mmcblk0p2'
+    for older versions. The rootfstype is auto-detected and does not need
+    to be specified.
+
+STEP 3: Copy Files to SD Card
+   Copy these files from your Windows PC onto the SD card's BOOT partition:
+   
+   - pi-setup.sh          (the setup script)
+   - DuckyScripts/        (folder with all your scripts)
+   
+   The scripts folder should contain .duckyscript files like:
+     default.duckyscript  (runs automatically on boot)
+     system_info.duckyscript
+     powershell_info.duckyscript
+
+
+ON THE RASPBERRY PI (first boot):
+----------------------------------
+
+1. Insert SD card into Pi, connect power and USB cable to your Windows PC
+2. SSH into the Pi:
+   
+   ssh pi@raspberrypi.local
+   
+   (or find its IP address on your router)
+
+3. Run the setup script:
+   
+   sudo bash /boot/pi-setup.sh
+
+4. Reboot:
+   
+   sudo reboot
+
+
+WHAT HAPPENS WHEN YOU PLUG THE PI INTO A COMPUTER:
+---------------------------------------------------
+1. The Pi boots up and activates USB Gadget mode
+2. Windows sees it as a keyboard device (like a regular keyboard)
+3. It runs default.duckyscript automatically
+4. Each command in the script gets typed into whatever window is active
+
+EXAMPLE: If you plug it into a computer with Notepad open, it will type
+everything in your script file!
+
+
+DUCKYSCRIPT COMMANDS (the language):
+-------------------------------------
+These are simple commands that tell the Pi what to type:
+
+  DELAY 1000        Wait 1 second (1000ms)
+  STRING Hello      Type "Hello" literally
+  ENTER             Press Enter key
+  TAB               Press Tab key
+  GUI r             Press Windows+R (opens Run dialog)
+  CTRL c            Press Ctrl+C (copy/stop)
+  F2                Press function key F2
+
+FULL EXAMPLE:
+  GUI r           -> Opens the Run dialog
+  DELAY 500       -> Wait half a second
+  STRING cmd      -> Types "cmd"
+  ENTER           -> Presses Enter (opens Command Prompt)
+
+
+TESTING ON YOUR WINDOWS PC (without the Pi):
+---------------------------------------------
+You can test your scripts on Windows using the Python interpreter:
+
+  cd C:\Users\Tymam\OneDrive\Documents\Hacking\DuckyScripts
+  python ducky.py hello_world.duckyscript
+  
+This will type "Hello from Raspberry Pi Rubber Ducky!" into whatever
+window is currently active (make sure to click on Notepad or similar first).
+
+
+CREATING YOUR OWN SCRIPTS:
+---------------------------
+Create a new .duckyscript file with any text editor. Each line is one command:
+
+  DELAY 2000              Wait 2 seconds after plugging in
+  GUI r                   Open Run dialog
+  DELAY 500               Wait for it to open
+  STRING powershell       Type "powershell"
+  ENTER                   Press Enter (opens PowerShell)
+  DELAY 1500              Wait for PowerShell to load
+  STRING Write-Host "Hi!" -> Types a message in PowerShell
+  ENTER                   
+  STRING exit             Type "exit"  
+  ENTER                   Close PowerShell
+
+NAME your main script: default.duckyscript
+This is the one that runs automatically when you plug the Pi into any computer.
+
+
+TROUBLESHOOTING:
+----------------
+Pi not showing as keyboard?
+  - Check config.txt has "dtoverlay=dwc2"
+  - Try a different USB cable (data cables, not charge-only)
+
+Scripts not running?
+  - Make sure default.duckyscript exists in the right location
+  - Check syntax: each line should be one command only
+
+Windows doesn't recognize it?
+  - Try a different USB port (USB 2.0 ports work more reliably)
+  - Some laptops have USB port security that blocks gadget devices
+
+
+WHAT EACH FILE DOES:
+--------------------
+DuckyScripts/
+├── ducky.py              Python interpreter for DuckyScript files
+├── pi-setup.sh           Sets up USB Gadget mode on the Pi
+├── default.duckyscript   Main script (runs automatically)
+├── hello_world.duckyscript  Simple test script
+├── system_info.duckyscript  Shows system info via Command Prompt
+└── powershell_info.duckyscript Shows info via PowerShell
+
+
+NEXT STEPS:
+-----------
+1. Test scripts on Windows first (python ducky.py)
+2. Flash SD card with Pi OS + dtoverlay=dwc2
+3. Copy files to SD card
+4. Boot the Pi and run pi-setup.sh
+5. Unplug from your PC, plug into target computer
+6. Watch it type automatically!
+
+================================================================================

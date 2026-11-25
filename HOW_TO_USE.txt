@@ -1,0 +1,88 @@
+================================================================================
+          HOW TO USE THE RASPBERRY PI RUBBER DUCKY (SIMPLE GUIDE)
+================================================================================
+
+STEP 1: Write your script on your PC
+-------------------------------------
+Open any text editor and type commands like this:
+
+  DELAY 2000              Wait 2 seconds after plugging in
+  GUI r                   Open the Run dialog
+  DELAY 500               Wait for it to appear
+  STRING cmd              Type "cmd"
+  ENTER                   Press Enter (opens Command Prompt)
+  DELAY 1500              Wait for CMD to load
+  STRING echo Hello!     Type a message
+  ENTER
+
+Save the file as something.duckyscript in the DuckyScripts\scripts\ folder.
+
+
+STEP 2: Start the server on your PC
+------------------------------------
+Double-click: start_ducky_server.bat
+
+You'll see both your IP address and your computer's name. Remember either one.
+
+
+STEP 3: Configure the Pi to fetch from your PC
+------------------------------------------------
+On the Pi, edit this file:
+
+  sudo nano /usr/local/share/duckyscripts/loader.conf
+
+Change the SCRIPT_URL line. You have two choices:
+
+  A) Use your IP (may change over time):
+     SCRIPT_URL=http://192.168.68.XXX/default.duckyscript
+
+  B) Use your computer name via mDNS (never changes):
+     SCRIPT_URL=http://YOUR_COMPUTER_NAME.local/default.duckyscript
+
+Save (Ctrl+O, Enter) and exit (Ctrl+X).
+
+
+TIPS FOR LONG-TERM USE
+-----------------------
+If using option A (IP address), set a static DHCP reservation in your router
+so your PC always gets the same IP. Log into 192.168.68.1 → find "DHCP
+Reservation" or "Static Lease" → add an entry for your PC's MAC address.
+
+If using option B (mDNS), make sure both your PC and Pi are on the same
+network. The .local address stays the same even if your IP changes.
+
+----------
+Each time you plug the Pi into a target computer:
+- It boots up as a USB keyboard
+- It fetches your latest script from your PC's server
+- It types everything automatically
+
+To change what it does:
+1. Edit or replace the .duckyscript file in DuckyScripts\scripts\
+2. The Pi will pick up the new version each boot
+
+
+TROUBLESHOOTING
+---------------
+Pi can't reach your PC?
+  - Make sure both are on the same WiFi/network
+  - Check Windows Firewall allows port 8080 (inbound rule for python.exe)
+  - Try using .local hostname instead of IP if you're unsure about DHCP
+
+Want something that never changes, ever?
+  - Upload your .duckyscript to GitHub or Pastebin
+  - Set SCRIPT_URL to the raw URL — works from any network, any time
+
+Want to use GitHub instead of a local server?
+  - Upload your .duckyscript to a GitHub repo
+  - Set SCRIPT_URL to the raw URL (https://raw.githubusercontent.com/...)
+
+
+EXAMPLE SCRIPTS TO TRY
+-----------------------
+See the existing files in DuckyScripts\ for ready-to-use examples:
+  hello_world.duckyscript   - Simple test
+  system_info.duckyscript   - Shows PC info via CMD
+  powershell_info.duckyscript - Shows PC info via PowerShell
+
+================================================================================

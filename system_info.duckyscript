@@ -1,0 +1,19 @@
+DELAY 1000
+GUI r
+DELAY 500
+STRING cmd
+ENTER
+DELAY 2000
+STRING echo ================================
+ENTER
+STRING echo Raspberry Pi as USB Rubber Ducky
+ENTER
+STRING echo ================================
+ENTER
+ENTER
+STRING systeminfo | findstr /I "OS\|Hostname\|Total Physical Memory"
+ENTER
+DELAY 1500
+STRING echo All done! Press any key to close...
+ENTER
+SLEEP 2000

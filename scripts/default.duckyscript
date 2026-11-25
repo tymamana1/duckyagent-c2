@@ -1,0 +1,18 @@
+DELAY 2000
+STRING ====================================
+ENTER
+STRING   Raspberry Pi USB Rubber Ducky
+ENTER
+STRING   Ready to execute commands!
+ENTER
+STRING ====================================
+ENTER
+ENTER
+GUI r
+DELAY 500
+STRING cmd
+ENTER
+DELAY 1500
+STRING echo Welcome - Your Pi is now a Rubber Ducky!
+ENTER
+SLEEP 2000
