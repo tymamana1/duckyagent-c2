@@ -133,12 +133,19 @@ def execute_command(target_name, command):
     if url.startswith("http://") and "/api/" in url:
         # Local HTTP endpoint - send JSON to /api/command/ path
         api_url = f"{url}command/{command}"
+
+        # Get API key from config if available
+        api_key = target.get("api_key", "")
+        headers = {"User-Agent": "DuckyCLI/1.0"}
+        if api_key:
+            headers["X-API-Key"] = api_key
+
         try:
-            req = Request(api_url, headers={"User-Agent": "DuckyCLI/1.0"})
+            req = Request(api_url, headers=headers)
             with urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
 
-                # Update last_seen timestamp
+                # Update last_seen timestamp (heartbeat-based)
                 target["last_seen"] = time.strftime("%Y-%m-%d %H:%M")
                 targets[target_name] = target
                 save_targets(targets)
@@ -617,6 +624,9 @@ def show_command_help():
         "HASH CRACKING": [
             "crack_hash <h>    - Crack an NTLM hash",
             "john_crack         - Run John the Ripper on extracted hashes",
+        ],
+        "HEARTBEAT": [
+            "heartbeat / ping  - Check if target is online (returns timestamp)",
         ],
         "FILES": [
             "ls /path          - List files in a directory",
